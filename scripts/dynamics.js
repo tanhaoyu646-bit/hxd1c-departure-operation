@@ -12,7 +12,7 @@ export class TrainSimulation {
       parkingBrake: true, authority: false, headlight: false, horn: false, hornActive: false, vigilanceAcknowledged: false, direction: 'N',
       auxiliaryLight: false, markerFront: '0', markerRear: '0', cabLight: false,
       // 初始为大闸运转位、小闸缓解位，车辆由停放制动保持；这样才符合后续“减压试验—回运转位”的教学流程。
-      autoBrake: 0, independentBrake: 0, traction: 0, mainRes: 0, trainPipe: 0, brakeCyl: 0,
+      autoBrake: 0, independentBrake: 0, traction: 0, mainRes: 0, equalizingRes: 0, trainPipe: 0, brakeCyl: 0,
       netVoltage: 0, speed: 0, distance: 0, tractionForce: 0, brakeForce: 0,
       brakeTested: false, releaseObserved: false, elapsed: 0,
       rejected: 0, abrupt: 0, maxAcceleration: 0, maxJerk: 0, lastAcceleration: 0,
@@ -103,9 +103,16 @@ export class TrainSimulation {
     const s = this.state; s.elapsed += dt;
     const netTarget = s.panto ? 25 : 0; s.netVoltage += (netTarget - s.netVoltage) * Math.min(1, dt * 1.8);
     const mainTarget = s.compressor && s.mainBreaker ? 900 : 0; s.mainRes += (mainTarget - s.mainRes) * Math.min(1, dt * (s.compressor ? .22 : .02));
-    const pipeTarget = s.mainRes > 450 ? 500 - s.autoBrake * 55 : 0; s.trainPipe += (pipeTarget - s.trainPipe) * Math.min(1, dt * (s.autoBrake > 0 ? 1.8 : .55));
+    // 自阀各制动位按均衡风缸定压控制：初制动减压 50 kPa，
+    // 常用位逐级加深；紧急位快速排空。列车管滞后跟随均衡风缸，
+    // 制动缸再依据列车管减压量建立压力。
+    const equalizingTargets = [500, 450, 400, 350, 300, 0];
+    const equalizingTarget = s.mainRes > 450 ? equalizingTargets[s.autoBrake] : 0;
+    const emergencyBrake = s.autoBrake >= 5;
+    s.equalizingRes += (equalizingTarget - s.equalizingRes) * Math.min(1, dt * (emergencyBrake ? 5.5 : s.autoBrake > 0 ? 2.4 : .75));
+    s.trainPipe += (s.equalizingRes - s.trainPipe) * Math.min(1, dt * (emergencyBrake ? 4.2 : s.autoBrake > 0 ? 1.45 : .48));
     // 停放制动为独立的弹簧储能制动，不应冒充空气制动缸压力；否则大闸缓解试验会永远无法完成。
-    const autoCyl = s.autoBrake * 70; const individualCyl = s.independentBrake * 60;
+    const autoCyl = s.mainRes > 450 ? clamp((500 - s.trainPipe) * 1.27, 0, 350) : 0; const individualCyl = s.independentBrake * 60;
     const cylTarget = Math.max(autoCyl, individualCyl); s.brakeCyl += (cylTarget - s.brakeCyl) * Math.min(1, dt * 2.3);
     if (s.brakeTested && s.autoBrake === 0 && s.trainPipe > 470 && s.brakeCyl < 40) s.releaseObserved = true;
     const tractionAllowed = s.mainBreaker && s.authority && s.horn && s.headlight && s.direction === 'F' && !s.parkingBrake && s.autoBrake === 0 && s.independentBrake === 0 && s.brakeCyl < 15;

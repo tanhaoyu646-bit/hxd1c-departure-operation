@@ -7,8 +7,9 @@ export class TrainSimulation {
   }
   reset() {
     this.state = {
-      powerOn: false, initialConfirmed: false, lkjConfirmed: false, panto: false, mainBreaker: false, compressor: false,
-      parkingBrake: true, authority: false, headlight: false, horn: false, vigilanceAcknowledged: false, direction: 'N',
+      controlPowerOutput: false, parkingPower: false, output24V: false, powerOn: false,
+      initialConfirmed: false, lkjConfirmed: false, lkjData: null, panto: false, mainBreaker: false, compressor: false,
+      parkingBrake: true, authority: false, headlight: false, horn: false, hornActive: false, vigilanceAcknowledged: false, direction: 'N',
       auxiliaryLight: false, markerFront: '0', markerRear: '0', cabLight: false,
       // 初始为大闸运转位、小闸缓解位，车辆由停放制动保持；这样才符合后续“减压试验—回运转位”的教学流程。
       autoBrake: 0, independentBrake: 0, traction: 0, mainRes: 0, trainPipe: 0, brakeCyl: 0,
@@ -23,23 +24,56 @@ export class TrainSimulation {
   reject(message) { this.state.rejected += 1; this.emit(message); return false; }
   command(id, value) {
     const s = this.state;
+    if (id === 'power-cabinet-switch') {
+      const allowed = ['controlPowerOutput', 'parkingPower', 'output24V'];
+      const key = value?.key;
+      if (!allowed.includes(key)) return this.reject('未识别的控制电源柜开关。');
+      const enabled = Boolean(value?.enabled);
+      if (enabled && !s.powerOn && (s.traction !== 0 || s.direction !== 'N' || !s.parkingBrake)) return this.reject('初始位置不正确：确认牵引零位、方向中立并施加停放制动。');
+      s[key] = enabled;
+      const wasPowered = s.powerOn;
+      s.powerOn = s.controlPowerOutput && s.parkingPower && s.output24V;
+      if (s.powerOn) s.initialConfirmed = true;
+      if (!s.powerOn) {
+        s.mainBreaker = false;
+        s.compressor = false;
+        if (wasPowered) { s.lkjConfirmed = false; s.lkjData = null; }
+      }
+      const names = { controlPowerOutput: '控制电源输出', parkingPower: '停放制动电源', output24V: '24V 输出' };
+      this.emit(s.powerOn ? '三项电源均已接通，司机室控制电源建立。' : `${names[key]}已${enabled ? '接通' : '断开'}；须完成三项操作才能建立控制电源。`);
+      return true;
+    }
     if (id === 'control-power') {
       if (!s.powerOn && (s.traction !== 0 || s.direction !== 'N' || !s.parkingBrake)) return this.reject('初始位置不正确：确认牵引零位、方向中立并施加停放制动。');
-      if (!s.powerOn) s.initialConfirmed = true;
-      s.powerOn = !s.powerOn; if (!s.powerOn) s.mainBreaker = false; this.emit(s.powerOn ? '初始位置已确认，司机室控制电源已接通。' : '司机室控制电源已断开。'); return true;
+      const next = !s.powerOn;
+      s.controlPowerOutput = next; s.parkingPower = next; s.output24V = next; s.powerOn = next;
+      if (next) s.initialConfirmed = true;
+      else { s.mainBreaker = false; s.compressor = false; s.lkjConfirmed = false; s.lkjData = null; }
+      this.emit(next ? '调试快捷操作：三项控制电源已接通。' : '调试快捷操作：三项控制电源已断开。'); return true;
     }
-    if (id === 'lkj') { if (!s.powerOn) return this.reject('请先接通司机室控制电源。'); s.lkjConfirmed = true; this.emit('LKJ 参数与运行揭示已核对。'); return true; }
-    if (id === 'panto') { if (!s.powerOn) return this.reject('控制电源未接通，不能升弓。'); s.panto = !s.panto; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
-    if (id === 'main-breaker') { if (!s.panto || s.netVoltage < 19) return this.reject('网压未建立，禁止闭合主断路器。'); s.mainBreaker = !s.mainBreaker; this.emit(s.mainBreaker ? '主断路器已闭合。' : '主断路器已断开。'); return true; }
-    if (id === 'compressor') { if (!s.mainBreaker) return this.reject('主断路器未闭合，空压机不能投入。'); s.compressor = !s.compressor; this.emit(s.compressor ? '空气压缩机已投入。' : '空气压缩机已停止。'); return true; }
-    if (id === 'parking') { if (s.mainRes < 600) return this.reject('总风压力低于 600 kPa，不能缓解停放制动。'); s.parkingBrake = !s.parkingBrake; this.emit(s.parkingBrake ? '停放制动已施加。' : '停放制动已缓解。'); return true; }
+    if (id === 'lkj-confirm') {
+      if (!s.powerOn) return this.reject('请先在控制电源柜完成三项电源操作。');
+      const required = ['driverId', 'assistantId', 'section', 'station', 'trainNo', 'trainType', 'weight', 'cars', 'length'];
+      if (!value || required.some((key) => String(value[key] ?? '').trim() === '')) return this.reject('LKJ 参数不完整，不能确认。');
+      if (['weight', 'cars', 'length'].some((key) => !Number.isFinite(Number(value[key])) || Number(value[key]) <= 0)) return this.reject('LKJ 重量、辆数或计长输入不正确。');
+      s.lkjData = { ...value }; s.lkjConfirmed = true; this.emit('LKJ 参数已输入，运行揭示已查询确认。'); return true;
+    }
+    if (id === 'lkj') { if (!s.powerOn) return this.reject('请先接通司机室控制电源。'); s.lkjData = { debug: true }; s.lkjConfirmed = true; this.emit('调试快捷操作：LKJ 已确认。'); return true; }
+    if (id === 'panto') { if (!s.powerOn) return this.reject('控制电源未接通，不能升弓。'); const next=value===undefined?!s.panto:Boolean(value); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
+    if (id === 'main-breaker') { const next=value===undefined?!s.mainBreaker:Boolean(value); if (next && (!s.panto || s.netVoltage < 19)) return this.reject('网压未建立，禁止闭合主断路器。'); s.mainBreaker = next; this.emit(s.mainBreaker ? '主断路器已闭合。' : '主断路器已断开。'); return true; }
+    if (id === 'compressor') { const next=value===undefined?!s.compressor:Boolean(value); if (next && !s.mainBreaker) return this.reject('主断路器未闭合，空压机不能投入。'); s.compressor = next; this.emit(s.compressor ? '空气压缩机已投入。' : '空气压缩机已停止。'); return true; }
+    if (id === 'parking-apply') { s.parkingBrake = true; this.emit('停放制动已施加。'); return true; }
+    if (id === 'parking-release') { if (!s.parkingPower) return this.reject('停放制动电源未接通，不能缓解。'); if (s.mainRes < 600) return this.reject('总风压力低于 600 kPa，不能缓解停放制动。'); s.parkingBrake = false; this.emit('停放制动已缓解。'); return true; }
+    if (id === 'parking') { return this.command(s.parkingBrake ? 'parking-release' : 'parking-apply'); }
     if (id === 'authority') { if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数与揭示核对。'); s.authority = true; this.emit('已确认发车许可与允许信号。'); return true; }
     if (id === 'headlight') { s.headlight = !s.headlight; this.emit(s.headlight ? '前照灯已开启。' : '前照灯已关闭。'); return true; }
     if (id === 'auxiliary-light') { s.auxiliaryLight = !s.auxiliaryLight; this.emit(s.auxiliaryLight ? '辅照灯已开启。' : '辅照灯已关闭。'); return true; }
     if (id === 'marker-front') { s.markerFront = value || '0'; this.emit(`前标志灯已置于${s.markerFront === 'white' ? '白灯' : s.markerFront === 'red' ? '红灯' : '零位'}。`); return true; }
     if (id === 'marker-rear') { s.markerRear = value || '0'; this.emit(`后标志灯已置于${s.markerRear === 'white' ? '白灯' : s.markerRear === 'red' ? '红灯' : '零位'}。`); return true; }
     if (id === 'cab-light') { s.cabLight = !s.cabLight; this.emit(s.cabLight ? '司机室灯已开启。' : '司机室灯已关闭。'); return true; }
-    if (id === 'horn') { s.horn = true; this.emit('已执行鸣笛。'); return true; }
+    if (id === 'horn-start') { s.hornActive = true; s.horn = true; this.emit('风笛鸣响。'); return true; }
+    if (id === 'horn-stop') { s.hornActive = false; this.emit('风笛停止。'); return true; }
+    if (id === 'horn') { s.horn = true; this.emit('调试快捷操作：已执行鸣笛。'); return true; }
     if (id === 'reset') { s.vigilanceAcknowledged = true; this.emit('警惕/复位按钮已按下。'); return true; }
     if (id === 'direction') {
       if (s.traction !== 0) return this.reject('牵引手柄未回零，禁止改变方向。');

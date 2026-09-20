@@ -1,6 +1,6 @@
 export const PROCEDURE = [
   ['初始位置确认', s => s.initialConfirmed || (!s.powerOn && s.traction === 0 && s.direction === 'N' && s.parkingBrake)],
-  ['接通司机室控制电源', s => s.powerOn],
+  ['控制电源输出、停放制动电源及 24V 输出均接通', s => s.controlPowerOutput && s.parkingPower && s.output24V && s.powerOn],
   ['核对 LKJ 参数和运行揭示', s => s.lkjConfirmed],
   ['升受电弓并确认网压', s => s.panto && s.netVoltage >= 22.5],
   ['闭合主断路器', s => s.mainBreaker],

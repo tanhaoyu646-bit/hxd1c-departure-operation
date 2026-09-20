@@ -1,14 +1,14 @@
 import { TrainSimulation } from './dynamics.js';
 import { PROCEDURE, procedureState, scoreRun } from './procedure.js';
-import { MstsRouteScene } from './mstsRouteScene.js?rev=neijiangnan-full-section-v6-20260915';
+import { MstsRouteScene } from './mstsRouteScene.js?rev=side-view-correction-v7-20260920';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
 const overlay = $('#overlay');
 const routeScene = new MstsRouteScene($('#route-scene'));
-const views = { front: 'HXD1C_front.png', left: 'HXD1C_left.png', right: 'HXD1C_right.png' };
+const views = { front: 'HXD1C_front.png', left: 'HXD1C_left_full.png', right: 'HXD1C_right_full.png' };
 const debugMode = new URLSearchParams(location.search).get('debug') === '1';
-const keys = [['control-power','控制电源'],['lkj','LKJ确认'],['panto','前受电弓'],['main-breaker','主断合'],['compressor','压缩机'],['parking','停放缓解'],['authority','信号确认'],['headlight','前照灯'],['horn','风笛'],['reset','警惕/复位']];
+const keys = [['lkj','LKJ确认'],['panto','前受电弓'],['main-breaker','主断合'],['compressor','压缩机'],['parking','停放缓解'],['authority','信号确认'],['headlight','前照灯'],['horn','风笛'],['reset','警惕/复位']];
 let selectedView = 'front';
 let activeDrag = null;
 let switchPanelRoot = null;
@@ -57,8 +57,7 @@ function createFront() {
   // 原 CVF 没有为中部板钮定义鼠标热区；不再用猜测坐标冒充真实按钮。
   // 电气与辅助设备通过右侧经过命名校验的操作按钮控制，车内只保留 CVF 明确定义的复位热区。
   elements.reset=makeHotspot('reset','警惕/复位',386,312,32,32);
-  makePhysicalButton('power-cabinet','转身查看控制电源柜',0,252,42,112,(el)=>el.addEventListener('click',openPowerCabinet));
-  makePhysicalButton('lkj-device','放大 LKJ 监控装置',210,226,101,94,(el)=>el.addEventListener('click',openLkj));
+  makePhysicalButton('lkj-trigger','放大 LKJ 监控装置',210,226,101,94,(el)=>el.addEventListener('click',openLkj));
   elements.parkingApply=makePhysicalButton('parking-apply','停放制动施加（红）',157,350,21,29);
   elements.parkingRelease=makePhysicalButton('parking-release','停放制动缓解（绿）',179,350,22,29);
   elements.hornButton=makePhysicalButton('horn-button','风笛（按住）',577,408,37,39,(el)=>{
@@ -123,7 +122,6 @@ function playLkjKey(){try{lkjKeyAudio.currentTime=0;lkjKeyAudio.play().catch(()=
 function lkjButton(label,action,kind=''){const b=document.createElement('button');b.type='button';b.textContent=label;b.className=kind;b.addEventListener('click',()=>{playLkjKey();action();});return b;}
 function renderLkj(){
   if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');const keypad=lkjRoot.querySelector('.lkj-keypad');keypad.replaceChildren();
-  if(!sim.state.powerOn){screen.innerHTML='<b>设备无电</b><span>请先完成控制电源柜三项操作</span>';return;}
   if(sim.state.lkjConfirmed){screen.innerHTML=`<b>监控状态</b><span>车次 ${sim.state.lkjData?.trainNo||'—'}　揭示已确认</span><strong class="lkj-ok">LKJ 监控投入</strong>`;keypad.append(lkjButton('关闭',closeLkj,'wide'));return;}
   if(lkjPhase==='boot'){screen.innerHTML='<b>LKJ2000</b><span>设备自检正常</span><strong>请选择参数设定</strong>';keypad.append(lkjButton('参数设定',()=>{lkjPhase='edit';lkjFieldIndex=0;renderLkj();},'wide primary'));return;}
   if(lkjPhase==='edit'){
@@ -134,17 +132,17 @@ function renderLkj(){
   if(lkjPhase==='review'){screen.innerHTML=`<b>参数核对</b><div class="lkj-review">${lkjFields.map(([key,label])=>`<span>${label}</span><strong>${lkjDraft[key]||'—'}</strong>`).join('')}</div>`;keypad.append(lkjButton('返回修改',()=>{lkjPhase='edit';renderLkj();},'wide'));keypad.append(lkjButton('参数确认',()=>{lkjPhase='reveal';renderLkj();},'wide primary'));return;}
   screen.innerHTML='<b>运行揭示查询</b><span>揭示条目 3 条，已完成核对</span><strong>确认后投入 LKJ 监控</strong>';keypad.append(lkjButton('返回参数',()=>{lkjPhase='review';renderLkj();},'wide'));keypad.append(lkjButton('揭示确认',()=>{if(command('lkj-confirm',lkjDraft)){lkjPhase='done';renderLkj();}},'wide primary'));
 }
-function openLkj(){if(!lkjRoot)buildLkj();closePowerCabinet();closeSwitchPanel();lkjPhase=sim.state.lkjConfirmed?'done':'boot';lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');if(sim.state.powerOn){lkjStartAudio.currentTime=0;lkjStartAudio.play().catch(()=>{});}renderLkj();}
+function openLkj(){if(!lkjRoot)buildLkj();closeSwitchPanel();lkjPhase=sim.state.lkjConfirmed?'done':'boot';lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');lkjStartAudio.currentTime=0;lkjStartAudio.play().catch(()=>{});renderLkj();}
 function closeLkj(){if(!lkjRoot)return;lkjRoot.classList.remove('open');lkjRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 function closeDevicePanels(){closeSwitchPanel();closePowerCabinet();closeLkj();hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');}
 function buildSwitchPanel(){
   const root=document.createElement('div');root.id='switch-panel-modal';root.className='switch-panel-modal';root.setAttribute('aria-hidden','true');
-  root.innerHTML=`<div class="switch-panel-shell" role="dialog" aria-modal="true" aria-label="HXD1C板钮面板"><div class="switch-panel-head"><div><strong>板钮面板</strong><span>点击板钮进行操作</span></div><button type="button" class="switch-panel-close" aria-label="关闭板钮面板">×</button></div><div class="switch-panel-photo"><img src="./assets/switch-panel/HXD1C-switch-panel-reference.jpg" alt="HXD1C板钮面板实物参考" /><div class="switch-panel-controls"></div></div><div class="switch-panel-status">点击对应板钮；未满足联锁条件时系统会保持原位。</div></div>`;
+  root.innerHTML=`<div class="switch-panel-shell" role="dialog" aria-modal="true" aria-label="HXD1C板钮面板"><div class="switch-panel-head"><div><strong>板钮面板</strong><span>点击上半区或下半区拨动，松开后自动回中</span></div><button type="button" class="switch-panel-close" aria-label="关闭板钮面板">×</button></div><div class="switch-panel-photo"><img src="./assets/switch-panel/HXD1C-switch-panel-reference.jpg" alt="HXD1C板钮面板实物参考" /><div class="switch-panel-controls"></div></div><div class="switch-panel-status">主断：上合/下分；受电弓：上升/下降；空压机：上投入/下停止。</div></div>`;
   const controls=root.querySelector('.switch-panel-controls');
   for(const def of switchDefs){
     const button=document.createElement('button');button.type='button';button.className=`switch-unit type-${def.type}`;button.dataset.switchId=def.id;button.style.setProperty('--switch-x',def.x);button.setAttribute('aria-label',def.label);
     button.innerHTML=`<span class="switch-mask"><span class="switch-slot"></span><span class="switch-lever"><i></i></span></span><span class="switch-name">${def.label}</span><span class="switch-value">0</span>`;
-    button.addEventListener('click',()=>operateSwitch(def,button));controls.append(button);
+    button.addEventListener('click',(event)=>operateSwitch(def,button,event));controls.append(button);
   }
   root.querySelector('.switch-panel-close').addEventListener('click',closeSwitchPanel);
   root.addEventListener('click',(event)=>{if(event.target===root)closeSwitchPanel();});
@@ -152,9 +150,10 @@ function buildSwitchPanel(){
 }
 function openSwitchPanel(){if(selectedView!=='front')return;if(!switchPanelRoot)buildSwitchPanel();switchPanelRoot.classList.add('open');switchPanelRoot.setAttribute('aria-hidden','false');document.body.classList.add('switch-panel-active');syncSwitchPanel(sim.state);}
 function closeSwitchPanel(){if(!switchPanelRoot)return;switchPanelRoot.classList.remove('open');switchPanelRoot.setAttribute('aria-hidden','true');document.body.classList.remove('switch-panel-active');}
-function operateSwitch(def,button){
+function operateSwitch(def,button,event){
   const state=sim.state;let targetUp=true;let accepted=true;
   if(def.states){const current=def.read(state);const next=def.states[(def.states.indexOf(current)+1)%def.states.length];targetUp=next==='white';accepted=command(def.id,next);}
+  else if(def.momentary){const rect=button.getBoundingClientRect();targetUp=event?.clientY?event.clientY<rect.top+rect.height/2:!Boolean(def.read(state));accepted=command(def.id,targetUp);}
   else{targetUp=!Boolean(def.read(state));accepted=command(def.id,targetUp);}
   button.classList.remove('throw-up','throw-down','rejected');void button.offsetWidth;button.classList.add(targetUp?'throw-up':'throw-down');
   if(accepted===false)button.classList.add('rejected');
@@ -180,10 +179,10 @@ function render(state,message='') {
   for(const [id] of keys) document.querySelector(`#keys [data-id="${id}"]`)?.classList.toggle('active',activeState(id,state));
   syncSwitchPanel(state);
   syncPowerCabinet(state);
-  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${i+1}. ${n}</li>`).join(''); const score=scoreRun(state); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}`; if(message)$('#hint').textContent=message;
+  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}`; if(message)$('#hint').textContent=message;
 }
 function buildKeys(){if(!debugMode)return;document.body.classList.add('debug-mode');const root=$('#keys');keys.forEach(([id,name])=>{const b=document.createElement('button');b.dataset.id=id;b.textContent=name;b.addEventListener('click',()=>command(id));root.append(b);});}
-function setView(view){closeDevicePanels();selectedView=view;const cab=$('#cab');cab.src=`./assets/archive-cabview/${views[view]}`;routeScene.setView(view);document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='front')createFront();else overlay.replaceChildren();render(sim.state);}
+function setView(view){closeDevicePanels();selectedView=view;const cab=$('#cab');cab.src=`./assets/archive-cabview/${views[view]}`;cab.classList.toggle('side-view',view!=='front');routeScene.setView(view);document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='front')createFront();else overlay.replaceChildren();render(sim.state);}
 const mobileLike=matchMedia('(pointer: coarse)').matches||navigator.maxTouchPoints>0||/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 if(mobileLike)document.body.classList.add('mobile-controls-enabled');
 async function enterImmersive(){
@@ -204,4 +203,4 @@ $('#exit-immersive').addEventListener('click',exitImmersive);
 addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement&&document.documentElement.classList.contains('immersive')&&!mobileLike)document.documentElement.classList.remove('immersive');routeScene.resize();});
 addEventListener('orientationchange',()=>{closeDevicePanels();setTimeout(()=>routeScene.resize(),160);});
 window.visualViewport?.addEventListener('resize',()=>routeScene.resize());
-document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildPowerCabinet();buildLkj();buildKeys();bindDrag();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildKeys();bindDrag();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);

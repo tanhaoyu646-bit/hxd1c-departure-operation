@@ -7,8 +7,8 @@ export class TrainSimulation {
   }
   reset() {
     this.state = {
-      controlPowerOutput: false, parkingPower: false, output24V: false, powerOn: false,
-      initialConfirmed: false, lkjConfirmed: false, lkjData: null, panto: false, mainBreaker: false, compressor: false,
+      controlPowerOutput: true, parkingPower: true, output24V: true, powerOn: true,
+      initialConfirmed: true, lkjConfirmed: false, lkjData: null, panto: false, mainBreaker: false, compressor: false,
       parkingBrake: true, authority: false, headlight: false, horn: false, hornActive: false, vigilanceAcknowledged: false, direction: 'N',
       auxiliaryLight: false, markerFront: '0', markerRear: '0', cabLight: false,
       // 初始为大闸运转位、小闸缓解位，车辆由停放制动保持；这样才符合后续“减压试验—回运转位”的教学流程。
@@ -52,18 +52,17 @@ export class TrainSimulation {
       this.emit(next ? '调试快捷操作：三项控制电源已接通。' : '调试快捷操作：三项控制电源已断开。'); return true;
     }
     if (id === 'lkj-confirm') {
-      if (!s.powerOn) return this.reject('请先在控制电源柜完成三项电源操作。');
       const required = ['driverId', 'assistantId', 'section', 'station', 'trainNo', 'trainType', 'weight', 'cars', 'length'];
       if (!value || required.some((key) => String(value[key] ?? '').trim() === '')) return this.reject('LKJ 参数不完整，不能确认。');
       if (['weight', 'cars', 'length'].some((key) => !Number.isFinite(Number(value[key])) || Number(value[key]) <= 0)) return this.reject('LKJ 重量、辆数或计长输入不正确。');
       s.lkjData = { ...value }; s.lkjConfirmed = true; this.emit('LKJ 参数已输入，运行揭示已查询确认。'); return true;
     }
-    if (id === 'lkj') { if (!s.powerOn) return this.reject('请先接通司机室控制电源。'); s.lkjData = { debug: true }; s.lkjConfirmed = true; this.emit('调试快捷操作：LKJ 已确认。'); return true; }
-    if (id === 'panto') { if (!s.powerOn) return this.reject('控制电源未接通，不能升弓。'); const next=value===undefined?!s.panto:Boolean(value); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
+    if (id === 'lkj') { s.lkjData = { debug: true }; s.lkjConfirmed = true; this.emit('调试快捷操作：LKJ 已确认。'); return true; }
+    if (id === 'panto') { const next=value===undefined?!s.panto:Boolean(value); if (next && !s.lkjConfirmed) return this.reject('请先完成 LKJ 参数输入与运行揭示核对。'); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
     if (id === 'main-breaker') { const next=value===undefined?!s.mainBreaker:Boolean(value); if (next && (!s.panto || s.netVoltage < 19)) return this.reject('网压未建立，禁止闭合主断路器。'); s.mainBreaker = next; this.emit(s.mainBreaker ? '主断路器已闭合。' : '主断路器已断开。'); return true; }
     if (id === 'compressor') { const next=value===undefined?!s.compressor:Boolean(value); if (next && !s.mainBreaker) return this.reject('主断路器未闭合，空压机不能投入。'); s.compressor = next; this.emit(s.compressor ? '空气压缩机已投入。' : '空气压缩机已停止。'); return true; }
     if (id === 'parking-apply') { s.parkingBrake = true; this.emit('停放制动已施加。'); return true; }
-    if (id === 'parking-release') { if (!s.parkingPower) return this.reject('停放制动电源未接通，不能缓解。'); if (s.mainRes < 600) return this.reject('总风压力低于 600 kPa，不能缓解停放制动。'); s.parkingBrake = false; this.emit('停放制动已缓解。'); return true; }
+    if (id === 'parking-release') { if (s.mainRes < 600) return this.reject('总风压力低于 600 kPa，不能缓解停放制动。'); s.parkingBrake = false; this.emit('停放制动已缓解。'); return true; }
     if (id === 'parking') { return this.command(s.parkingBrake ? 'parking-release' : 'parking-apply'); }
     if (id === 'authority') { if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数与揭示核对。'); s.authority = true; this.emit('已确认发车许可与允许信号。'); return true; }
     if (id === 'headlight') { s.headlight = !s.headlight; this.emit(s.headlight ? '前照灯已开启。' : '前照灯已关闭。'); return true; }

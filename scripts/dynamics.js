@@ -9,6 +9,7 @@ export class TrainSimulation {
     this.state = {
       powerOn: false, initialConfirmed: false, lkjConfirmed: false, panto: false, mainBreaker: false, compressor: false,
       parkingBrake: true, authority: false, headlight: false, horn: false, vigilanceAcknowledged: false, direction: 'N',
+      auxiliaryLight: false, markerFront: '0', markerRear: '0', cabLight: false,
       // 初始为大闸运转位、小闸缓解位，车辆由停放制动保持；这样才符合后续“减压试验—回运转位”的教学流程。
       autoBrake: 0, independentBrake: 0, traction: 0, mainRes: 0, trainPipe: 0, brakeCyl: 0,
       netVoltage: 0, speed: 0, distance: 0, tractionForce: 0, brakeForce: 0,
@@ -34,6 +35,10 @@ export class TrainSimulation {
     if (id === 'parking') { if (s.mainRes < 600) return this.reject('总风压力低于 600 kPa，不能缓解停放制动。'); s.parkingBrake = !s.parkingBrake; this.emit(s.parkingBrake ? '停放制动已施加。' : '停放制动已缓解。'); return true; }
     if (id === 'authority') { if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数与揭示核对。'); s.authority = true; this.emit('已确认发车许可与允许信号。'); return true; }
     if (id === 'headlight') { s.headlight = !s.headlight; this.emit(s.headlight ? '前照灯已开启。' : '前照灯已关闭。'); return true; }
+    if (id === 'auxiliary-light') { s.auxiliaryLight = !s.auxiliaryLight; this.emit(s.auxiliaryLight ? '辅照灯已开启。' : '辅照灯已关闭。'); return true; }
+    if (id === 'marker-front') { s.markerFront = value || '0'; this.emit(`前标志灯已置于${s.markerFront === 'white' ? '白灯' : s.markerFront === 'red' ? '红灯' : '零位'}。`); return true; }
+    if (id === 'marker-rear') { s.markerRear = value || '0'; this.emit(`后标志灯已置于${s.markerRear === 'white' ? '白灯' : s.markerRear === 'red' ? '红灯' : '零位'}。`); return true; }
+    if (id === 'cab-light') { s.cabLight = !s.cabLight; this.emit(s.cabLight ? '司机室灯已开启。' : '司机室灯已关闭。'); return true; }
     if (id === 'horn') { s.horn = true; this.emit('已执行鸣笛。'); return true; }
     if (id === 'reset') { s.vigilanceAcknowledged = true; this.emit('警惕/复位按钮已按下。'); return true; }
     if (id === 'direction') {

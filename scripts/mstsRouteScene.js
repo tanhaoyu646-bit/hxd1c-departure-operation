@@ -368,9 +368,9 @@ export class MstsRouteScene {
     tangent.y = 0;
     if (tangent.lengthSq() > 0.000001) this.forward.copy(tangent.normalize());
     const baseYaw = Math.atan2(-this.forward.x, -this.forward.z);
-    const yawOffsets = { front: 0, left: THREE.MathUtils.degToRad(92), right: THREE.MathUtils.degToRad(-3) };
-    const pitchOffsets = { front: -0.22, left: -0.015, right: -0.105 };
-    const lateralOffsets = { front: 0, left: -0.58, right: 0.82 };
+    const yawOffsets = { front: 0, left: THREE.MathUtils.degToRad(65), right: THREE.MathUtils.degToRad(-65) };
+    const pitchOffsets = { front: -0.22, left: -0.035, right: -0.035 };
+    const lateralOffsets = { front: 0, left: -0.7, right: 0.7 };
     const right = new THREE.Vector3(this.forward.z, 0, -this.forward.x);
     this.camera.position.copy(position);
     this.camera.position.addScaledVector(right, lateralOffsets[this.view] || 0);

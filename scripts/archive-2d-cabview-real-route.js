@@ -1,6 +1,7 @@
 import { TrainSimulation } from './dynamics.js?rev=pressure-gauges-v2-20260920';
 import { PROCEDURE, procedureState, scoreRun } from './procedure.js';
 import { MstsRouteScene } from './mstsRouteScene.js?rev=side-view-correction-v7-20260920';
+import { ASSESSMENT_ASPECTS, LKJ_FIELD_DEFINITIONS, RUNNING_NOTICES, SIGNAL_ASPECTS } from './scenario.js';
 
 const $ = (q) => document.querySelector(q);
 const sim = new TrainSimulation();
@@ -8,7 +9,7 @@ const overlay = $('#overlay');
 const routeScene = new MstsRouteScene($('#route-scene'));
 const views = { front: 'HXD1C_front.png', left: 'HXD1C_left_full.png', right: 'HXD1C_right_full.png' };
 const debugMode = new URLSearchParams(location.search).get('debug') === '1';
-const keys = [['lkj','LKJ确认'],['panto','前受电弓'],['main-breaker','主断合'],['compressor','压缩机'],['parking','停放缓解'],['authority','信号确认'],['headlight','前照灯'],['horn','风笛'],['reset','警惕/复位']];
+const keys = [['lkj','LKJ确认'],['panto','前受电弓'],['main-breaker','主断合'],['compressor','压缩机'],['parking','停放缓解'],['headlight','前照灯'],['horn','风笛'],['reset','警惕/复位']];
 let selectedView = 'front';
 let activeDrag = null;
 let hornPointerId = null;
@@ -16,6 +17,10 @@ let switchPanelRoot = null;
 let switchPanelMessageTimer = null;
 let powerCabinetRoot = null;
 let lkjRoot = null;
+let signalRoot = null;
+let handSignalCard = null;
+let resultRoot = null;
+let resultShown = false;
 const hornAudio = new Audio('./assets/audio/HXD1C-horn.wav');
 hornAudio.preload = 'auto'; hornAudio.loop = true;
 const lkjKeyAudio = new Audio('./assets/audio/lkj-key.wav');
@@ -91,6 +96,7 @@ function createFront() {
   elements.clockDigital=makeDigital('clock-digital',230,268,45,10,'clock');
   elements.pantoDisplay=makeStateSprite('panto','HXD1C_DG.png',410,295,7,8,1,2);
   elements.signal=makeStateSprite('signal','HXD1C_jx.png',540,0,100,162,4,2);
+  elements.signalTrigger=makePhysicalButton('signal-trigger','点击确认出站色灯信号机',540,0,100,162,(el)=>el.addEventListener('click',openSignalInspection));
   for(const [id,el] of [['auto',elements.auto],['independent',elements.independent],['traction',elements.traction]]) el.addEventListener('pointerdown',(event)=>startDrag(id,el,event));
   // 原图控件保持原比例，另加透明的大触控区，避免手机上手指遮住并按不中小手柄。
   const touchControls=[
@@ -116,7 +122,7 @@ function syncPowerCabinet(state){if(!powerCabinetRoot)return;for(const b of powe
 function openPowerCabinet(){if(!powerCabinetRoot)buildPowerCabinet();closeLkj();closeSwitchPanel();powerCabinetRoot.classList.add('open');powerCabinetRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');syncPowerCabinet(sim.state);}
 function closePowerCabinet(){if(!powerCabinetRoot)return;powerCabinetRoot.classList.remove('open');powerCabinetRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
 
-const lkjFields=[['driverId','司机号'],['assistantId','副司机号'],['section','区段号'],['station','车站号'],['trainNo','车次'],['trainType','列车种类'],['weight','总重（t）'],['cars','辆数'],['length','计长']];
+const lkjFields=LKJ_FIELD_DEFINITIONS;
 const lkjKeyDefs=[
   ['alarm','警惕',134,532,52,57],['unlock','解锁',187,510,50,40],['relief','缓解',187,550,50,40],
   ['digit-1','向前／1',238,510,51,40],['digit-6','向后／6',238,550,51,40],['digit-2','调车／2',290,510,51,40],['digit-7','开车／7',290,550,51,40],
@@ -124,7 +130,7 @@ const lkjKeyDefs=[
   ['digit-5','定标／5',447,510,51,40],['digit-0','巡检／0',447,550,51,40],['query','查询',499,510,53,40],['left','左箭头／删除',499,550,53,40],
   ['up','上箭头',553,510,51,40],['down','下箭头',553,550,51,40],['dump','转储',604,510,50,40],['right','右箭头／确认',604,550,50,40],
 ];
-let lkjDraft={};let lkjFieldIndex=0;let lkjPhase='boot';let lkjNotice='';
+let lkjDraft={};let lkjFieldIndex=0;let lkjPhase='boot';let lkjNotice='';let lkjNoticeIndex=0;
 function buildLkj(){
   const root=document.createElement('div');root.className='device-modal lkj-modal';root.setAttribute('aria-hidden','true');
   root.innerHTML=`<div class="device-shell lkj-shell" role="dialog" aria-modal="true" aria-label="LKJ2000监控装置"><div class="device-head"><div><strong>LKJ2000 监控装置</strong><span>输入参数并核对运行揭示</span></div><button type="button" class="device-close" aria-label="关闭">×</button></div><div class="lkj-device"><img src="./assets/lkj/LKJ2000.png" alt="LKJ2000设备面板"><div class="lkj-screen"></div><div class="lkj-keypad"></div></div></div>`;
@@ -150,23 +156,84 @@ function handleLkjKey(id){
     if(id==='right'){if(!value){flashLkj('本项不能为空');return;}if(lkjFieldIndex<lkjFields.length-1)lkjFieldIndex+=1;else lkjPhase='review';renderLkj();return;}
     flashLkj('当前为参数输入状态');return;
   }
-  if(lkjPhase==='review'){if(id==='left'||id==='up'||id==='relief'){lkjPhase='edit';renderLkj();return;}if(id==='right'||id==='query'){lkjPhase='reveal';renderLkj();return;}flashLkj('按【→】进入揭示核对');return;}
-  if(lkjPhase==='reveal'){if(id==='left'||id==='relief'){lkjPhase='review';renderLkj();return;}if(id==='right'||id==='query'||id==='digit-7'){if(command('lkj-confirm',lkjDraft)){lkjPhase='done';renderLkj();}return;}flashLkj('按【→】确认运行揭示');}
+  if(lkjPhase==='review'){if(id==='left'||id==='up'||id==='relief'){lkjPhase='edit';renderLkj();return;}if(id==='right'||id==='query'){lkjPhase='reveal';lkjNoticeIndex=0;renderLkj();return;}flashLkj('按【→】进入揭示核对');return;}
+  if(lkjPhase==='reveal'){
+    if(id==='left'||id==='relief'){lkjPhase='review';renderLkj();return;}
+    if(id==='right'||id==='query'||id==='digit-7'){
+      if(lkjNoticeIndex<RUNNING_NOTICES.length-1){lkjNoticeIndex+=1;renderLkj();return;}
+      if(command('lkj-confirm',lkjDraft)){lkjPhase='done';renderLkj();}return;
+    }
+    flashLkj('按【→】逐条核对运行揭示');
+  }
 }
 function renderLkj(){
   if(!lkjRoot)return;const screen=lkjRoot.querySelector('.lkj-screen');
   if(sim.state.lkjConfirmed&&lkjPhase!=='review'){screen.innerHTML=`<b>监控状态</b><span>车次 ${sim.state.lkjData?.trainNo||'—'}　揭示已确认</span><strong class="lkj-ok">LKJ 监控投入</strong><span class="lkj-help">按【查询】查看已设参数</span>`;return;}
   if(lkjPhase==='boot'){screen.innerHTML='<b>LKJ2000</b><span>设备自检正常</span><strong>按【查询】进入参数设定</strong><span class="lkj-help">使用显示器下方实体键操作</span>';return;}
   if(lkjPhase==='edit'){
-    const [key,label]=lkjFields[lkjFieldIndex];const value=lkjDraft[key]||'';screen.innerHTML=`<b>参数输入 ${lkjFieldIndex+1}/${lkjFields.length}</b><span>${label}</span><strong class="lkj-input">${value||'_'}</strong>`;
-    screen.insertAdjacentHTML('beforeend',`<span class="lkj-help">数字键输入　【←】删除　【↑↓】换项　【→】确认${lkjNotice?`<br>${lkjNotice}`:''}</span>`);return;
+    const [key,label,target]=lkjFields[lkjFieldIndex];const value=lkjDraft[key]||'';screen.innerHTML=`<b>参数输入 ${lkjFieldIndex+1}/${lkjFields.length}</b><span>${label}</span><strong class="lkj-input">${value||'_'}</strong>`;
+    screen.insertAdjacentHTML('beforeend',`<span class="lkj-help">训练值：${target}<br>数字键输入　【←】删除　【↑↓】换项　【→】确认${lkjNotice?`<br>${lkjNotice}`:''}</span>`);return;
   }
   if(lkjPhase==='review'){screen.innerHTML=`<b>参数核对</b><div class="lkj-review">${lkjFields.map(([key,label])=>`<span>${label}</span><strong>${lkjDraft[key]||'—'}</strong>`).join('')}</div><span class="lkj-help">【←】返回修改　【→】进入揭示核对${lkjNotice?`<br>${lkjNotice}`:''}</span>`;return;}
-  screen.innerHTML=`<b>运行揭示查询</b><span>揭示条目 3 条，已完成核对</span><strong>按【→】确认并投入监控</strong><span class="lkj-help">【←】返回参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`;
+  const last=lkjNoticeIndex===RUNNING_NOTICES.length-1;
+  screen.innerHTML=`<b>运行揭示 ${lkjNoticeIndex+1}/${RUNNING_NOTICES.length}</b><span>${RUNNING_NOTICES[lkjNoticeIndex]}</span><strong>${last?'按【→】确认并投入监控':'按【→】查看下一条揭示'}</strong><span class="lkj-help">【←】返回参数${lkjNotice?`<br>${lkjNotice}`:''}</span>`;
 }
-function openLkj(){if(!lkjRoot)buildLkj();closeSwitchPanel();lkjPhase=sim.state.lkjConfirmed?'done':'boot';lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');lkjStartAudio.currentTime=0;lkjStartAudio.play().catch(()=>{});renderLkj();}
+function openLkj(){if(!lkjRoot)buildLkj();closeSwitchPanel();closeSignalInspection();lkjPhase=sim.state.lkjConfirmed?'done':'boot';lkjNoticeIndex=0;lkjDraft=sim.state.lkjData&&!sim.state.lkjData.debug?{...sim.state.lkjData}:{};lkjRoot.classList.add('open');lkjRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');lkjStartAudio.currentTime=0;lkjStartAudio.play().catch(()=>{});renderLkj();}
 function closeLkj(){if(!lkjRoot)return;lkjRoot.classList.remove('open');lkjRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
-function closeDevicePanels(){closeSwitchPanel();closePowerCabinet();closeLkj();if(hornPointerId!==null)stopHorn();else{hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');}}
+function buildSignalInspection(){
+  const root=document.createElement('div');root.className='device-modal signal-modal';root.setAttribute('aria-hidden','true');
+  root.innerHTML=`<div class="device-shell signal-shell" role="dialog" aria-modal="true" aria-label="出站色灯信号机确认"><div class="device-head"><div><strong>出站色灯信号机</strong><span>观察显示后，选择对应信号及其含义</span></div><button type="button" class="device-close" aria-label="关闭">×</button></div><div class="signal-inspection-body"><div class="signal-lens"><div class="signal-lens-sprite"></div></div><div class="signal-observation"><b data-signal-question>请选择所见信号</b><p data-signal-meaning>四显示自动闭塞课堂训练</p><div class="signal-answer-buttons"></div><small>红灯仅用于教学讲解，禁止越过该信号机。</small></div></div></div>`;
+  const buttons=root.querySelector('.signal-answer-buttons');
+  for(const key of ['green','greenYellow','yellow','red']){const b=document.createElement('button');b.type='button';b.dataset.signalAnswer=key;b.textContent=SIGNAL_ASPECTS[key].label;b.addEventListener('click',()=>{
+    const accepted=command('signal-answer',key);renderSignalInspection(sim.state);
+    if(accepted&&sim.state.handSignalRequired){closeSignalInspection();openHandSignalCard();}
+    else if(accepted)closeSignalInspection();
+  });buttons.append(b);}
+  root.querySelector('.device-close').addEventListener('click',closeSignalInspection);root.addEventListener('click',(event)=>{if(event.target===root)closeSignalInspection();});document.body.append(root);signalRoot=root;renderSignalInspection(sim.state);
+}
+function renderSignalInspection(state){
+  if(!signalRoot)return;const aspect=SIGNAL_ASPECTS[state.signalAspect];const sprite=signalRoot.querySelector('.signal-lens-sprite');
+  sprite.style.backgroundImage='url("./assets/archive-cabview/HXD1C_jx.png")';sprite.style.backgroundSize='400% 200%';frame(sprite,aspect.frame,4,2);
+  signalRoot.querySelector('[data-signal-question]').textContent=state.signalObserved&&state.signalMeaningCorrect?`已确认：${aspect.label}`:'请选择所见信号';
+  signalRoot.querySelector('[data-signal-meaning]').textContent=state.signalObserved&&state.signalMeaningCorrect?aspect.meaning:'按信号显示完成行车凭证确认。';
+  for(const b of signalRoot.querySelectorAll('[data-signal-answer]'))b.classList.toggle('selected',b.dataset.signalAnswer===state.signalAspect&&state.signalObserved&&state.signalMeaningCorrect);
+}
+function openSignalInspection(){if(!signalRoot)buildSignalInspection();closeLkj();closeSwitchPanel();signalRoot.classList.add('open');signalRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');renderSignalInspection(sim.state);}
+function closeSignalInspection(){if(!signalRoot)return;signalRoot.classList.remove('open');signalRoot.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');}
+function buildHandSignalCard(){
+  const card=document.createElement('section');card.className='hand-signal-card';card.setAttribute('aria-live','polite');
+  card.innerHTML=`<button type="button" class="hand-signal-close" aria-label="收起发车手信号">×</button><b>发车手信号</b><video muted loop playsinline preload="metadata"><source src="./assets/video/AnimateDiff_00392-audio.mp4" type="video/mp4"></video><p>确认昼间发车手信号后继续。</p><button type="button" class="hand-signal-confirm">已确认发车信号</button>`;
+  card.querySelector('.hand-signal-close').addEventListener('click',closeHandSignalCard);card.querySelector('.hand-signal-confirm').addEventListener('click',()=>{if(command('hand-signal-confirm'))closeHandSignalCard();});$('#stage').append(card);handSignalCard=card;
+}
+function openHandSignalCard(){if(!handSignalCard)buildHandSignalCard();handSignalCard.classList.add('open');const video=handSignalCard.querySelector('video');video.currentTime=0;video.play().catch(()=>{});}
+function closeHandSignalCard(){if(!handSignalCard)return;handSignalCard.classList.remove('open');const video=handSignalCard.querySelector('video');video.pause();}
+function buildTrainingControls(){
+  const root=$('#training-controls');if(!root)return;
+  root.innerHTML=`<div class="training-row"><button type="button" data-training="initial">确认初始位置</button></div><div class="training-row mode-row"><button type="button" data-mode="teaching">教学模式</button><button type="button" data-mode="assessment">考评模式</button></div><div class="training-row aspect-row"><span>教师信号：</span><button type="button" data-aspect="green">绿</button><button type="button" data-aspect="greenYellow">绿黄</button><button type="button" data-aspect="yellow">黄</button><button type="button" data-aspect="red">红</button></div><label class="training-check"><input type="checkbox" data-hand-required checked> 本场景要求发车手信号</label><p class="training-state" data-training-state></p>`;
+  root.querySelector('[data-training="initial"]').addEventListener('click',()=>command('initial-confirm'));
+  root.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>command('training-mode',b.dataset.mode)));
+  root.querySelectorAll('[data-aspect]').forEach(b=>b.addEventListener('click',()=>command('signal-aspect',b.dataset.aspect)));
+  root.querySelector('[data-hand-required]').addEventListener('change',(event)=>command('hand-signal-required',event.target.checked));
+  syncTrainingControls(sim.state);
+}
+function syncTrainingControls(state){
+  const root=$('#training-controls');if(!root)return;root.querySelector('[data-training="initial"]').classList.toggle('active',state.initialConfirmed);
+  root.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===state.trainingMode));
+  root.querySelectorAll('[data-aspect]').forEach(b=>{b.classList.toggle('active',b.dataset.aspect===state.signalAspect);b.disabled=state.trainingMode!=='teaching';});
+  const check=root.querySelector('[data-hand-required]');check.checked=state.handSignalRequired;check.disabled=state.trainingMode!=='teaching';
+  const aspect=SIGNAL_ASPECTS[state.signalAspect];root.querySelector('[data-training-state]').textContent=`当前：${state.trainingMode==='teaching'?'教学':'考评'}模式 · ${aspect.label}${state.authority?' · 行车凭证已确认':''}`;
+}
+function buildResultReport(){
+  const root=document.createElement('div');root.className='device-modal result-modal';root.setAttribute('aria-hidden','true');
+  root.innerHTML=`<div class="device-shell result-shell" role="dialog" aria-modal="true" aria-label="发车作业考评成绩单"><div class="device-head"><div><strong>发车作业考评成绩单</strong><span>课堂训练结果，不作为实际作业记录</span></div><button type="button" class="device-close" aria-label="关闭成绩单">×</button></div><div class="result-body"><div class="result-score"><b data-result-score>0</b><span>分</span></div><p data-result-summary></p><ol data-result-items></ol><button type="button" class="result-close">完成查看</button></div></div>`;
+  const close=()=>{root.classList.remove('open');root.setAttribute('aria-hidden','true');document.body.classList.remove('device-panel-active');};root.querySelector('.device-close').addEventListener('click',close);root.querySelector('.result-close').addEventListener('click',close);root.addEventListener('click',(event)=>{if(event.target===root)close();});document.body.append(root);resultRoot=root;
+}
+function showResultReport(state){
+  if(state.trainingMode!=='assessment'||resultShown)return;if(!resultRoot)buildResultReport();const score=scoreRun(state);const p=procedureState(state);
+  resultRoot.querySelector('[data-result-score]').textContent=score.score;resultRoot.querySelector('[data-result-summary]').textContent=`完成 ${score.completed}/${PROCEDURE.length} 个作业项点${score.deductions?`，操作扣分 ${score.deductions} 分`:'，无操作扣分'}。`;
+  resultRoot.querySelector('[data-result-items]').innerHTML=PROCEDURE.map(([label,,weight],index)=>`<li class="${p.complete[index]?'pass':'fail'}"><span>${label}</span><b>${p.complete[index]?`${weight}/${weight}`:`0/${weight}`}</b></li>`).join('');resultRoot.classList.add('open');resultRoot.setAttribute('aria-hidden','false');document.body.classList.add('device-panel-active');resultShown=true;
+}
+function closeDevicePanels(){closeSwitchPanel();closePowerCabinet();closeLkj();closeSignalInspection();closeHandSignalCard();if(hornPointerId!==null)stopHorn();else{hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');}}
 function buildSwitchPanel(){
   const root=document.createElement('div');root.id='switch-panel-modal';root.className='switch-panel-modal';root.setAttribute('aria-hidden','true');
   root.innerHTML=`<div class="switch-panel-shell" role="dialog" aria-modal="true" aria-label="HXD1C板钮面板"><div class="switch-panel-head"><div><strong>板钮面板</strong><span>点击上半区或下半区拨动，板钮保持在所选位置</span></div><button type="button" class="switch-panel-close" aria-label="关闭板钮面板">×</button></div><div class="switch-panel-photo"><img src="./assets/switch-panel/HXD1C-switch-panel-reference.jpg" alt="HXD1C板钮面板实物参考" /><div class="switch-panel-controls"></div></div><div class="switch-panel-status">主断：上合/下分；受电弓：上升/下降；空压机：上投入/下停止。</div></div>`;
@@ -213,13 +280,15 @@ function render(state,message='') {
     elements.speedDigital.textContent=Math.round(state.speed); elements.limitDigital.textContent='30'; elements.clockDigital.textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});
     const autoNames=['运转位','初制动位','常用制动Ⅱ','常用制动Ⅲ','常用制动Ⅳ','紧急位'];const independentNames=['缓解位','制动Ⅰ','制动Ⅱ','制动Ⅲ','制动Ⅳ','全制动位'];
     elements.autoPosition.querySelector('span').textContent=autoNames[state.autoBrake];elements.independentPosition.querySelector('span').textContent=independentNames[state.independentBrake];elements.directionPosition.querySelector('span').textContent=state.direction==='F'?'前进位':state.direction==='R'?'后退位':'中立位';elements.tractionPosition.querySelector('span').textContent=state.traction>0?`牵引 ${state.traction} 级`:state.traction<0?`电制动 ${Math.abs(state.traction)} 级`:'零位';
-    frame(elements.pantoDisplay,state.panto?1:0,1,2); frame(elements.signal,state.authority?6:0,4,2);
+    frame(elements.pantoDisplay,state.panto?1:0,1,2); frame(elements.signal,SIGNAL_ASPECTS[state.signalAspect].frame,4,2);
   }
   for(const [id] of keys) document.querySelector(`#keys [data-id="${id}"]`)?.classList.toggle('active',activeState(id,state));
   syncSwitchPanel(state);
   if(message&&switchPanelRoot?.classList.contains('open'))setSwitchPanelMessage(message);
   syncPowerCabinet(state);
-  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}`; if(message)$('#hint').textContent=message;
+  renderSignalInspection(state);syncTrainingControls(state);
+  if(!procedureState(state).done||state.trainingMode!=='assessment')resultShown=false;
+  const p=procedureState(state); $('#procedure').innerHTML=PROCEDURE.map(([n],i)=>`<li class="${p.complete[i]?'done':i===p.current?'active':''}">${n}</li>`).join(''); const score=scoreRun(state); const aspect=SIGNAL_ASPECTS[state.signalAspect]; $('#status').innerHTML=`<strong>状态：</strong>${p.done?'训练完成':'第 '+(p.current+1)+' 步'}<br>总风 ${state.mainRes.toFixed(0)} kPa · 制动缸 ${state.brakeCyl.toFixed(0)} kPa<br>信号 ${aspect.label}${state.authority?' · 行车凭证已确认':''}<br>速度 ${state.speed.toFixed(1)} km/h · 当前得分 ${score.score}${score.deductions?` · 扣分 ${score.deductions}`:''}`; if(message)$('#hint').textContent=message;if(p.done)showResultReport(state);
 }
 function stopHorn(event){if(hornPointerId===null)return;if(event?.pointerId!==undefined&&event.pointerId!==hornPointerId)return;hornPointerId=null;hornAudio.pause();hornAudio.currentTime=0;if(sim.state.hornActive)command('horn-stop');elements.hornButton?.classList.remove('pressed');}
 function buildKeys(){if(!debugMode)return;document.body.classList.add('debug-mode');const root=$('#keys');keys.forEach(([id,name])=>{const b=document.createElement('button');b.dataset.id=id;b.textContent=name;b.addEventListener('click',()=>command(id));root.append(b);});}
@@ -245,4 +314,4 @@ addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement&&documen
 addEventListener('orientationchange',()=>{closeDevicePanels();setTimeout(()=>routeScene.resize(),160);});
 window.visualViewport?.addEventListener('resize',()=>routeScene.resize());
 addEventListener('pointerup',stopHorn,true);addEventListener('pointercancel',stopHorn,true);addEventListener('blur',()=>stopHorn());addEventListener('pagehide',()=>stopHorn());document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHorn();});
-document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildKeys();bindDrag();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));buildSwitchPanel();buildLkj();buildTrainingControls();buildKeys();bindDrag();setView('front');sim.onChange(render);let last=performance.now();function loop(now){sim.tick(Math.min(.05,(now-last)/1000));routeScene.render();last=now;requestAnimationFrame(loop)}requestAnimationFrame(loop);

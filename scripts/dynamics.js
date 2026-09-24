@@ -1,3 +1,5 @@
+import { ASSESSMENT_ASPECTS, SIGNAL_ASPECTS, isLkjParameterMatch } from './scenario.js';
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 export class TrainSimulation {
@@ -8,8 +10,10 @@ export class TrainSimulation {
   reset() {
     this.state = {
       controlPowerOutput: true, parkingPower: true, output24V: true, powerOn: true,
-      initialConfirmed: true, lkjConfirmed: false, lkjData: null, panto: false, mainBreaker: false, compressor: false,
-      parkingBrake: true, authority: false, headlight: false, horn: false, hornActive: false, vigilanceAcknowledged: false, direction: 'N',
+      initialConfirmed: false, lkjConfirmed: false, lkjData: null, panto: false, mainBreaker: false, compressor: false,
+      parkingBrake: true, authority: false, trainingMode: 'teaching', signalAspect: 'green', signalObserved: false,
+      signalMeaningCorrect: false, handSignalRequired: true, handSignalConfirmed: false,
+      headlight: false, horn: false, hornActive: false, vigilanceAcknowledged: false, direction: 'N',
       auxiliaryLight: false, markerFront: '0', markerRear: '0', cabLight: false,
       // 初始为大闸运转位、小闸缓解位，车辆由停放制动保持；这样才符合后续“减压试验—回运转位”的教学流程。
       autoBrake: 0, independentBrake: 0, traction: 0, mainRes: 0, equalizingRes: 0, trainPipe: 0, brakeCyl: 0,
@@ -22,8 +26,47 @@ export class TrainSimulation {
   onChange(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit(message = '') { for (const fn of this.listeners) fn(this.state, message); }
   reject(message) { this.state.rejected += 1; this.emit(message); return false; }
+  syncAuthority() {
+    const s = this.state;
+    const permissive = ['green', 'greenYellow', 'yellow'].includes(s.signalAspect);
+    s.authority = Boolean(s.lkjConfirmed && permissive && s.signalObserved && s.signalMeaningCorrect && (!s.handSignalRequired || s.handSignalConfirmed));
+  }
   command(id, value) {
     const s = this.state;
+    if (id === 'initial-confirm') {
+      const ready = s.traction === 0 && s.direction === 'N' && s.autoBrake === 0 && s.independentBrake === 0 && s.parkingBrake;
+      if (!ready) return this.reject('初始位置不正确：牵引零位、方向中立、大闸运转位、小闸缓解位并施加停放制动。');
+      s.initialConfirmed = true; this.emit('设备初始位置已核对。'); return true;
+    }
+    if (id === 'training-mode') {
+      if (!['teaching', 'assessment'].includes(value)) return this.reject('未识别的训练模式。');
+      s.trainingMode = value;
+      if (value === 'assessment') s.signalAspect = ASSESSMENT_ASPECTS[Math.floor(Math.random() * ASSESSMENT_ASPECTS.length)];
+      s.signalObserved = false; s.signalMeaningCorrect = false; s.handSignalConfirmed = false; this.syncAuthority();
+      this.emit(value === 'teaching' ? '已进入教学模式：教师可设置出站信号。' : `已进入考评模式：本次出站信号为随机显示。`); return true;
+    }
+    if (id === 'signal-aspect') {
+      if (s.trainingMode !== 'teaching') return this.reject('考评模式下由系统随机设置出站信号。');
+      if (!SIGNAL_ASPECTS[value]) return this.reject('未识别的信号显示。');
+      s.signalAspect = value; s.signalObserved = false; s.signalMeaningCorrect = false; s.handSignalConfirmed = false; this.syncAuthority();
+      this.emit(`教学信号已设置为${SIGNAL_ASPECTS[value].label}。`); return true;
+    }
+    if (id === 'hand-signal-required') {
+      s.handSignalRequired = Boolean(value); s.handSignalConfirmed = false; this.syncAuthority();
+      this.emit(s.handSignalRequired ? '本场景要求确认发车手信号。' : '本场景不要求发车手信号。'); return true;
+    }
+    if (id === 'signal-answer') {
+      if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数与运行揭示核对。');
+      s.signalObserved = true;
+      s.signalMeaningCorrect = value === s.signalAspect && s.signalAspect !== 'red';
+      this.syncAuthority();
+      if (!s.signalMeaningCorrect) return this.reject('信号显示或含义确认不正确，请重新观察出站信号机。');
+      this.emit(`已正确确认${SIGNAL_ASPECTS[s.signalAspect].label}。${s.handSignalRequired ? '请继续确认发车手信号。' : '已具备行车凭证条件。'}`); return true;
+    }
+    if (id === 'hand-signal-confirm') {
+      if (!s.signalMeaningCorrect) return this.reject('请先正确确认出站信号。');
+      s.handSignalConfirmed = true; this.syncAuthority(); this.emit('发车手信号已确认，具备发车条件。'); return true;
+    }
     if (id === 'power-cabinet-switch') {
       const allowed = ['controlPowerOutput', 'parkingPower', 'output24V'];
       const key = value?.key;
@@ -33,7 +76,7 @@ export class TrainSimulation {
       s[key] = enabled;
       const wasPowered = s.powerOn;
       s.powerOn = s.controlPowerOutput && s.parkingPower && s.output24V;
-      if (s.powerOn) s.initialConfirmed = true;
+      if (s.powerOn) s.initialConfirmed = false;
       if (!s.powerOn) {
         s.mainBreaker = false;
         s.compressor = false;
@@ -47,24 +90,25 @@ export class TrainSimulation {
       if (!s.powerOn && (s.traction !== 0 || s.direction !== 'N' || !s.parkingBrake)) return this.reject('初始位置不正确：确认牵引零位、方向中立并施加停放制动。');
       const next = !s.powerOn;
       s.controlPowerOutput = next; s.parkingPower = next; s.output24V = next; s.powerOn = next;
-      if (next) s.initialConfirmed = true;
+      if (next) s.initialConfirmed = false;
       else { s.mainBreaker = false; s.compressor = false; s.lkjConfirmed = false; s.lkjData = null; }
       this.emit(next ? '调试快捷操作：三项控制电源已接通。' : '调试快捷操作：三项控制电源已断开。'); return true;
     }
     if (id === 'lkj-confirm') {
       const required = ['driverId', 'assistantId', 'section', 'station', 'trainNo', 'trainType', 'weight', 'cars', 'length'];
+      if (!s.initialConfirmed) return this.reject('请先确认设备初始位置。');
       if (!value || required.some((key) => String(value[key] ?? '').trim() === '')) return this.reject('LKJ 参数不完整，不能确认。');
-      if (['weight', 'cars', 'length'].some((key) => !Number.isFinite(Number(value[key])) || Number(value[key]) <= 0)) return this.reject('LKJ 重量、辆数或计长输入不正确。');
-      s.lkjData = { ...value }; s.lkjConfirmed = true; this.emit('LKJ 参数已输入，运行揭示已查询确认。'); return true;
+      if (!isLkjParameterMatch(value)) return this.reject('LKJ 参数与本次课堂训练任务不一致，请复核后重新输入。');
+      s.lkjData = { ...value }; s.lkjConfirmed = true; this.syncAuthority(); this.emit('LKJ 参数已输入，运行揭示已查询确认。'); return true;
     }
-    if (id === 'lkj') { s.lkjData = { debug: true }; s.lkjConfirmed = true; this.emit('调试快捷操作：LKJ 已确认。'); return true; }
+    if (id === 'lkj') { s.lkjData = { debug: true }; s.lkjConfirmed = true; this.syncAuthority(); this.emit('调试快捷操作：LKJ 已确认。'); return true; }
     if (id === 'panto') { const next=value===undefined?!s.panto:Boolean(value); if (next && !s.lkjConfirmed) return this.reject('请先完成 LKJ 参数输入与运行揭示核对。'); s.panto = next; if (!s.panto) s.mainBreaker = false; this.emit(s.panto ? '受电弓已升起，正在建立网压。' : '受电弓已降下。'); return true; }
     if (id === 'main-breaker') { const next=value===undefined?!s.mainBreaker:Boolean(value); if (next && (!s.panto || s.netVoltage < 19)) return this.reject('网压未建立，禁止闭合主断路器。'); s.mainBreaker = next; this.emit(s.mainBreaker ? '主断路器已闭合。' : '主断路器已断开。'); return true; }
     if (id === 'compressor') { const next=value===undefined?!s.compressor:Boolean(value); if (next && !s.mainBreaker) return this.reject('主断路器未闭合，空压机不能投入。'); s.compressor = next; this.emit(s.compressor ? '空气压缩机已投入。' : '空气压缩机已停止。'); return true; }
     if (id === 'parking-apply') { s.parkingBrake = true; this.emit('停放制动已施加。'); return true; }
     if (id === 'parking-release') { if (s.mainRes < 600) return this.reject('总风压力低于 600 kPa，不能缓解停放制动。'); s.parkingBrake = false; this.emit('停放制动已缓解。'); return true; }
     if (id === 'parking') { return this.command(s.parkingBrake ? 'parking-release' : 'parking-apply'); }
-    if (id === 'authority') { if (!s.lkjConfirmed) return this.reject('请先完成 LKJ 参数与揭示核对。'); s.authority = true; this.emit('已确认发车许可与允许信号。'); return true; }
+    if (id === 'authority') { return this.reject('请点击出站信号机，完成信号及发车手信号确认。'); }
     if (id === 'headlight') { s.headlight = !s.headlight; this.emit(s.headlight ? '前照灯已开启。' : '前照灯已关闭。'); return true; }
     if (id === 'auxiliary-light') { s.auxiliaryLight = !s.auxiliaryLight; this.emit(s.auxiliaryLight ? '辅照灯已开启。' : '辅照灯已关闭。'); return true; }
     if (id === 'marker-front') { s.markerFront = value || '0'; this.emit(`前标志灯已置于${s.markerFront === 'white' ? '白灯' : s.markerFront === 'red' ? '红灯' : '零位'}。`); return true; }
@@ -80,7 +124,7 @@ export class TrainSimulation {
     }
     if (id === 'auto-brake') {
       const next = clamp(Number(value), 0, 5); if (next < s.autoBrake - 1 || next > s.autoBrake + 2) s.abrupt += 1;
-      if (next >= 2 && s.trainPipe > 420) s.brakeTested = true;
+      if (next >= 1 && s.trainPipe > 420) s.brakeTested = true;
       s.autoBrake = next; this.emit(next === 0 ? '自动制动阀已回运转位。' : `自动制动阀置于制动档 ${next}。`); return true;
     }
     if (id === 'independent-brake') { s.independentBrake = clamp(Number(value), 0, 5); this.emit('单独制动阀档位已调整。'); return true; }
